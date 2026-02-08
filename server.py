@@ -8,6 +8,7 @@ from office365.sharepoint.client_context import ClientContext
 load_dotenv()
 
 SHAREPOINT_SITE_URL = "https://postidcac.sharepoint.com/sites/ComputerScienceLibrary-StudentsTeam2"
+SHAREPOINT_BASE_FOLDER = "/sites/ComputerScienceLibrary-StudentsTeam2/Shared Documents"
 STUDENT_EMAIL = os.getenv("SHAREPOINT_EMAIL")
 STUDENT_PASSWORD = os.getenv("SHAREPOINT_PASSWORD")
 
@@ -37,13 +38,6 @@ def _get_ctx() -> ClientContext:
     return _ctx
 
 
-def _get_default_root_url(ctx: ClientContext) -> str:
-    """Return the serverRelativeUrl of the default document library root."""
-    lib = ctx.web.default_document_library()
-    ctx.load(lib, ["RootFolder"])
-    ctx.execute_query()
-    return lib.root_folder.serverRelativeUrl
-
 
 # ---------------------------------------------------------------------------
 # Tool: list_files
@@ -64,7 +58,7 @@ def list_files(folder_url: str = "") -> str:
         ctx = _get_ctx()
 
         if not folder_url:
-            folder_url = _get_default_root_url(ctx)
+            folder_url = SHAREPOINT_BASE_FOLDER
 
         folder = ctx.web.get_folder_by_server_relative_url(folder_url)
         ctx.load(folder, ["Files", "Folders"])
@@ -148,7 +142,7 @@ def search_files(query: str, folder_url: str = "") -> str:
         ctx = _get_ctx()
 
         if not folder_url:
-            folder_url = _get_default_root_url(ctx)
+            folder_url = SHAREPOINT_BASE_FOLDER
 
         matches: list[str] = []
         _search_recursive(ctx, folder_url, query.lower(), matches)
