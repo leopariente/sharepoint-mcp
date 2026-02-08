@@ -1,0 +1,5 @@
+Office365-REST-Python-Client>=2.6.2
+msal>=1.34.0
+requests>=2.31.0
+python-dotenv>=0.21.0
+mcp[cli]>=1.0.0
