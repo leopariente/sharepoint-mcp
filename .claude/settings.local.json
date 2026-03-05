@@ -1,0 +1,6 @@
+{
+  "enabledMcpjsonServers": [
+    "sharepoint-agent"
+  ],
+  "enableAllProjectMcpServers": true
+}

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "sharepoint-agent": {
+      "command": "C:\\Users\\leopa\\OneDrive\\Desktop\\cs\\projects\\sharepoint-agent\\.venv\\Scripts\\python.exe",
+      "args": ["C:\\Users\\leopa\\OneDrive\\Desktop\\cs\\projects\\sharepoint-agent\\server.py"]
+    }
+  }
+}

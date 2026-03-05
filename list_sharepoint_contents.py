@@ -10,10 +10,8 @@ load_dotenv()
 # --- CONFIGURATION ---
 # The specific SharePoint site URL provided by the user
 SHAREPOINT_SITE_URL = "https://postidcac.sharepoint.com/sites/ComputerScienceLibrary-StudentsTeam2"
-STUDENT_EMAIL = "leo.pariente@post.runi.ac.il"
-STUDENT_PASSWORD = os.getenv("SHAREPOINT_PASSWORD") # IMPORTANT: Replace with your actual password or use environment variable
-# ---------------------
-# ---------------------
+STUDENT_EMAIL = os.getenv("SHAREPOINT_EMAIL")
+STUDENT_PASSWORD = os.getenv("SHAREPOINT_PASSWORD")
 
 def get_sharepoint_context( ):
     """
