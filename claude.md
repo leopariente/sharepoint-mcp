@@ -103,3 +103,66 @@ All course paths below are relative to this base.
 - If a course is not in the registry, say so and offer to browse SharePoint to locate it.
 - To add a new course to this registry, append a row to the appropriate table above with the course name and its SharePoint path.
 - Elective course folders are generic (`Elective Course 1`, etc.) — if the user tells you which elective maps to which slot, update the table accordingly.
+
+## Finding Homework Questions
+
+When a user asks to find a specific homework question, exercise, or problem in the SharePoint course library — for example "find the question about X in exercise/homework Y", "find exercise 7 about graphs", "look for a problem about dynamic programming in algorithms" — follow the full search flow below.
+
+---
+
+### Step 1 — Identify What You're Looking For
+
+From the user's request, extract:
+- **Course name** (e.g. "Algorithms", "Advanced Programming", "Intro to Probability")
+- **Homework / Exercise number** (e.g. HW7, Exercise 7, Assignment 7)
+- **Topic hint** (optional, e.g. "about kids and cities", "network flow", "dynamic programming")
+
+If the course is ambiguous, ask the user before proceeding.
+
+---
+
+### Step 2 — Find the Right Folder
+
+Use the Course Registry above to get the SharePoint path for the course directly — no browsing needed. Inside the course folder, there are year subfolders: `2021/`, `2022/`, `2023/`, `2024/`, `2025/`, `2026/`. Inside each year, look for an `Exercises/` subfolder.
+
+Folder path pattern:
+```
+/sites/ComputerScienceLibrary-StudentsTeam2/Shared Documents/
+  {course path} / {year} / Exercises / {filename}.pdf
+```
+
+---
+
+### Step 3 — Collect Candidate PDF Files
+
+Use `list_files` on the `Exercises/` folder for the most recent years first (2025, 2024, 2023). Filter to files whose name contains the homework number (e.g. `HW7`, `hw7`, `Assignment 7`, `HW_7`).
+
+Example matching files:
+```
+ElizavetaKhanan_HW7_82.pdf
+OhadSwissa_HW7_97.pdf
+Assignment 7 - Rotem Haim 100.pdf
+```
+
+---
+
+### Step 4 — Read PDFs Smartly
+
+**CRITICAL: Most PDFs are large (>1MB) scanned files. Never read all pages.**
+
+Always call:
+```
+read_pdf(file_url=..., pages="1-5", max_chars=8000)
+```
+
+- The question statement is on the first 1–3 pages; student answers follow after
+- `search_content` will not work for scanned PDFs — always use `read_pdf` directly
+- **Stop as soon as you find the question** — do not keep reading more files
+
+---
+
+### Step 5 — Extract and Present the Question
+
+- Quote the exact question text, including all sub-parts
+- Mention which file and year it came from
+- If not found in one year, try the next (2025 → 2024 → 2023)

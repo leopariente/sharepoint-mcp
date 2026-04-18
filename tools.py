@@ -16,52 +16,31 @@ SHAREPOINT_BASE_FOLDER = "/sites/ComputerScienceLibrary-StudentsTeam2/Shared Doc
 STUDENT_EMAIL = os.getenv("SHAREPOINT_EMAIL")
 STUDENT_PASSWORD = os.getenv("SHAREPOINT_PASSWORD")
 
-mcp = FastMCP("sharepoint-agent")
-
 _CLAUDE_MD = (Path(__file__).parent / "claude.md").read_text(encoding="utf-8")
 
+mcp = FastMCP("sharepoint-agent", host="0.0.0.0", instructions=_CLAUDE_MD)
 
-@mcp.prompt()
-def sharepoint_instructions() -> str:
-    """Course registry and usage instructions for the SharePoint agent."""
-    return _CLAUDE_MD
 
-# Reusable SharePoint context — created once per server lifetime.
+# ---------------------------------------------------------------------------
+# SharePoint context — created once and reused across all tool calls.
+# ---------------------------------------------------------------------------
 _ctx: ClientContext | None = None
 
 
-def _build_ctx() -> ClientContext:
-    """Create and authenticate a new SharePoint ClientContext."""
+def _get_ctx() -> ClientContext:
+    global _ctx
+    if _ctx is not None:
+        return _ctx
     if not STUDENT_PASSWORD:
         raise RuntimeError(
             "SHAREPOINT_PASSWORD environment variable is not set. "
             "Set it before starting the server."
         )
     credentials = UserCredential(STUDENT_EMAIL, STUDENT_PASSWORD)
-    ctx = ClientContext(SHAREPOINT_SITE_URL).with_credentials(credentials)
-    ctx.load(ctx.web)
-    ctx.execute_query()
-    return ctx
-
-
-def _get_ctx(force_new: bool = False) -> ClientContext:
-    """Return a cached SharePoint ClientContext, creating it if needed."""
-    global _ctx
-    if _ctx is not None and not force_new:
-        return _ctx
-    _ctx = _build_ctx()
+    _ctx = ClientContext(SHAREPOINT_SITE_URL).with_credentials(credentials)
+    _ctx.load(_ctx.web)
+    _ctx.execute_query()
     return _ctx
-
-
-def _run_with_retry(fn):
-    """Run *fn(ctx)*, retrying once with a fresh context on failure."""
-    ctx = _get_ctx()
-    try:
-        return fn(ctx)
-    except Exception:
-        ctx = _get_ctx(force_new=True)
-        return fn(ctx)
-
 
 
 # ---------------------------------------------------------------------------
@@ -79,8 +58,8 @@ def list_files(folder_url: str = SHAREPOINT_BASE_FOLDER) -> str:
     Returns:
         A formatted listing of files (with sizes) and subfolders.
     """
-
-    def _do(ctx):
+    try:
+        ctx = _get_ctx()
         folder = ctx.web.get_folder_by_server_relative_url(folder_url)
         ctx.load(folder, ["Files", "Folders"])
         ctx.execute_query()
@@ -99,9 +78,6 @@ def list_files(folder_url: str = SHAREPOINT_BASE_FOLDER) -> str:
             lines.append("  (empty)")
 
         return "\n".join(lines)
-
-    try:
-        return _run_with_retry(_do)
     except Exception as e:
         return _format_error("list_files", folder_url, e)
 
@@ -123,7 +99,8 @@ def read_file_content(file_url: str) -> str:
     Returns:
         The text content of the file, or an error message.
     """
-    def _do(ctx):
+    try:
+        ctx = _get_ctx()
         response = ctx.web.get_file_by_server_relative_url(file_url)
         buf = io.BytesIO()
         response.download(buf).execute_query()
@@ -140,9 +117,6 @@ def read_file_content(file_url: str) -> str:
                     f"[binary content — {len(raw)} bytes] "
                     "The file does not appear to be text-based."
                 )
-
-    try:
-        return _run_with_retry(_do)
     except Exception as e:
         return _format_error("read_file_content", file_url, e)
 
@@ -165,7 +139,8 @@ def search_files(query: str, folder_url: str = "") -> str:
     if not folder_url:
         folder_url = SHAREPOINT_BASE_FOLDER
 
-    def _do(ctx):
+    try:
+        ctx = _get_ctx()
         search = SearchService(ctx)
         kql = f'filename:"{query}" path:"{SHAREPOINT_SITE_URL}"'
         result = search.post_query(
@@ -188,9 +163,6 @@ def search_files(query: str, folder_url: str = "") -> str:
 
         header = f"Files matching '{query}' under {folder_url}:\n"
         return header + "\n".join(f"  {m}" for m in matches)
-
-    try:
-        return _run_with_retry(_do)
     except Exception as e:
         return _format_error("search_files", folder_url, e)
 
@@ -216,7 +188,8 @@ def search_content(
     Returns:
         Ranked list of matching files with relevance score and a content snippet.
     """
-    def _do(ctx):
+    try:
+        ctx = _get_ctx()
         search = SearchService(ctx)
 
         kql = f'"{query}"'
@@ -231,9 +204,9 @@ def search_content(
 
         result = search.post_query(
             query_text=kql,
-            select_properties=["Title", "Path", "HitHighlightedSummary", "Rank", "FileType"],
+            select_properties=["Title", "Path"],
             row_limit=max_results,
-            trim_duplicates=True,
+            trim_duplicates=False,
         )
         ctx.execute_query()
 
@@ -241,30 +214,39 @@ def search_content(
         if not rows:
             return f"No files found containing '{query}'."
 
+        def _cells_to_dict(row):
+            cells = {}
+            for c in row.Cells:
+                if hasattr(c, "Key") and hasattr(c, "Value"):
+                    cells[c.Key] = c.Value
+                elif isinstance(c, dict):
+                    cells[c.get("Key", "")] = c.get("Value", "")
+            return cells
+
         lines = [f"Files containing '{query}':\n"]
         for i, row in enumerate(rows, 1):
-            cells = {c.Key: c.Value for c in row.Cells}
+            cells = _cells_to_dict(row)
             title = cells.get("Title") or cells.get("FileName", "Unknown")
             path = cells.get("Path", "")
-            rank = cells.get("Rank", "")
-            snippet = re.sub(r"<[^>]+>", "", cells.get("HitHighlightedSummary", "")).strip()
-            if len(snippet) > 200:
-                snippet = snippet[:200] + "..."
 
             lines.append(f"[{i}] {title}")
             lines.append(f"    Path:  {path}")
-            if rank:
-                lines.append(f"    Score: {rank}")
-            if snippet:
-                lines.append(f"    \"{snippet}\"")
             lines.append("")
 
         return "\n".join(lines)
-
-    try:
-        return _run_with_retry(_do)
     except Exception as e:
         return _format_error("search_content", query, e)
+
+
+# ---------------------------------------------------------------------------
+# Shared helper
+# ---------------------------------------------------------------------------
+def _detect_language(text: str) -> str:
+    has_hebrew = any("\u0590" <= c <= "\u05FF" for c in text)
+    has_latin = any("a" <= c.lower() <= "z" for c in text)
+    if has_hebrew and has_latin:
+        return "Hebrew + English"
+    return "Hebrew" if has_hebrew else "English"
 
 
 # ---------------------------------------------------------------------------
@@ -297,19 +279,13 @@ def read_pdf(
             return list(range(int(start) - 1, min(int(end), total)))
         return [int(s) - 1]
 
-    def _detect_language(text: str) -> str:
-        has_hebrew = any("\u0590" <= c <= "\u05FF" for c in text)
-        has_latin = any("a" <= c.lower() <= "z" for c in text)
-        if has_hebrew and has_latin:
-            return "Hebrew + English"
-        return "Hebrew" if has_hebrew else "English"
+    try:
+        import pymupdf
+    except ImportError:
+        return "[read_pdf] pymupdf is not installed. Run: pip install pymupdf"
 
-    def _do(ctx):
-        try:
-            import pymupdf
-        except ImportError:
-            return "[read_pdf] pymupdf is not installed. Run: pip install pymupdf"
-
+    try:
+        ctx = _get_ctx()
         file_obj = ctx.web.get_file_by_server_relative_url(file_url)
         buf = io.BytesIO()
         file_obj.download(buf).execute_query()
@@ -335,11 +311,151 @@ def read_pdf(
             f"Pages: {len(doc)} | Language: {lang} | Size: {size_mb} MB\n\n"
         )
         return header + full_text[:max_chars]
-
-    try:
-        return _run_with_retry(_do)
     except Exception as e:
         return _format_error("read_pdf", file_url, e)
+
+
+# ---------------------------------------------------------------------------
+# Tool: read_docx
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def read_docx(
+    file_url: str,
+    max_chars: int = 8000,
+) -> str:
+    """Extract text from a Word document (.docx) stored in SharePoint.
+
+    Extracts paragraphs and table contents in reading order.
+
+    Args:
+        file_url: SharePoint server-relative URL of the .docx file.
+        max_chars: Maximum characters to return. Default: 8000.
+
+    Returns:
+        Extracted text with heading markers and table contents, or an error message.
+    """
+    try:
+        from docx import Document
+        from docx.oxml.ns import qn
+    except ImportError:
+        return "[read_docx] python-docx is not installed. Run: pip install python-docx"
+
+    try:
+        ctx = _get_ctx()
+        file_obj = ctx.web.get_file_by_server_relative_url(file_url)
+        buf = io.BytesIO()
+        file_obj.download(buf).execute_query()
+        buf.seek(0)
+
+        doc = Document(buf)
+        filename = file_url.split("/")[-1]
+        lines: list[str] = []
+
+        for block in doc.element.body:
+            tag = block.tag.split("}")[-1] if "}" in block.tag else block.tag
+
+            if tag == "p":
+                from docx.text.paragraph import Paragraph
+                para = Paragraph(block, doc)
+                text = para.text.strip()
+                if not text:
+                    continue
+                style = para.style.name if para.style else ""
+                if style.startswith("Heading"):
+                    level = style.replace("Heading", "").strip()
+                    prefix = "#" * int(level) if level.isdigit() else "##"
+                    lines.append(f"{prefix} {text}")
+                else:
+                    lines.append(text)
+
+            elif tag == "tbl":
+                from docx.table import Table
+                table = Table(block, doc)
+                for row in table.rows:
+                    cells = [c.text.strip() for c in row.cells]
+                    lines.append(" | ".join(cells))
+                lines.append("")
+
+        full_text = "\n".join(lines)
+        lang = _detect_language(full_text)
+        header = (
+            f"File: {filename}\n"
+            f"Paragraphs: {len(doc.paragraphs)} | Language: {lang}\n\n"
+        )
+        return header + full_text[:max_chars]
+    except Exception as e:
+        return _format_error("read_docx", file_url, e)
+
+
+# ---------------------------------------------------------------------------
+# Tool: read_pptx
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def read_pptx(
+    file_url: str,
+    slides: str = "all",
+    max_chars: int = 8000,
+) -> str:
+    """Extract text from a PowerPoint file (.pptx) stored in SharePoint.
+
+    Extracts all text shapes from each slide, including titles and bullet points.
+
+    Args:
+        file_url: SharePoint server-relative URL of the .pptx file.
+        slides: Slides to read — "all", a single slide ("3"), or a range ("1-5").
+        max_chars: Maximum characters to return. Default: 8000.
+
+    Returns:
+        Extracted slide text with slide headers, or an error message.
+    """
+    def _parse_slide_range(slides_str: str, total: int) -> list[int]:
+        s = slides_str.strip().lower()
+        if s == "all":
+            return list(range(total))
+        if "-" in s:
+            start, end = s.split("-", 1)
+            return list(range(int(start) - 1, min(int(end), total)))
+        return [int(s) - 1]
+
+    try:
+        from pptx import Presentation
+    except ImportError:
+        return "[read_pptx] python-pptx is not installed. Run: pip install python-pptx"
+
+    try:
+        ctx = _get_ctx()
+        file_obj = ctx.web.get_file_by_server_relative_url(file_url)
+        buf = io.BytesIO()
+        file_obj.download(buf).execute_query()
+        buf.seek(0)
+
+        prs = Presentation(buf)
+        filename = file_url.split("/")[-1]
+        slide_indices = _parse_slide_range(slides, len(prs.slides))
+
+        lines: list[str] = []
+        for i in slide_indices:
+            if 0 <= i < len(prs.slides):
+                slide = prs.slides[i]
+                lines.append(f"--- Slide {i + 1} ---")
+                for shape in slide.shapes:
+                    if not shape.has_text_frame:
+                        continue
+                    for para in shape.text_frame.paragraphs:
+                        text = para.text.strip()
+                        if text:
+                            lines.append(text)
+                lines.append("")
+
+        full_text = "\n".join(lines)
+        lang = _detect_language(full_text)
+        header = (
+            f"File: {filename}\n"
+            f"Slides: {len(prs.slides)} | Language: {lang}\n\n"
+        )
+        return header + full_text[:max_chars]
+    except Exception as e:
+        return _format_error("read_pptx", file_url, e)
 
 
 # ---------------------------------------------------------------------------
@@ -363,21 +479,30 @@ def get_file_metadata(
         match = re.search(r"_(\d{2,3})\.\w+$", filename, re.IGNORECASE)
         return match.group(1) if match else None
 
-    def _do(ctx):
+    try:
+        ctx = _get_ctx()
         file_obj = ctx.web.get_file_by_server_relative_url(file_url)
         ctx.load(file_obj, ["Name", "Length", "TimeCreated", "TimeLastModified", "UIVersionLabel"])
         ctx.execute_query()
 
         author = "Unknown"
+        modified_by = "Unknown"
         try:
             list_item = file_obj.listItemAllFields
-            ctx.load(list_item, ["Author"])
+            ctx.load(list_item, ["Author", "Editor"])
             ctx.execute_query()
+
+            def _extract_name(val):
+                if isinstance(val, dict):
+                    return val.get("Title", val.get("LoginName", "Unknown"))
+                return str(val) if val else "Unknown"
+
             author_val = list_item.get_property("Author")
-            if isinstance(author_val, dict):
-                author = author_val.get("Title", author_val.get("LoginName", "Unknown"))
-            elif author_val:
-                author = str(author_val)
+            editor_val = list_item.get_property("Editor")
+            modified_by = _extract_name(editor_val)
+            author = _extract_name(author_val)
+            if author == "Unknown":
+                author = modified_by
         except Exception:
             pass
 
@@ -393,9 +518,10 @@ def get_file_metadata(
             f"File: {name}",
             "=" * 40,
             f"Path:     {file_url}",
-            f"Author:   {author}",
-            f"Uploaded: {created}",
-            f"Modified: {modified}",
+            f"Author:      {author}",
+            f"Modified By: {modified_by}",
+            f"Uploaded:    {created}",
+            f"Modified:    {modified}",
             f"Size:     {size_mb} MB",
             f"Grade:    {grade if grade else 'N/A (not in filename)'}",
             f"Version:  {version}",
@@ -414,9 +540,6 @@ def get_file_metadata(
                 lines.append(f"\nVersion history unavailable: {ve}")
 
         return "\n".join(lines)
-
-    try:
-        return _run_with_retry(_do)
     except Exception as e:
         return _format_error("get_file_metadata", file_url, e)
 
@@ -440,14 +563,11 @@ def _format_error(tool: str, target: str, exc: Exception) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Eager auth check — called by both entry points on startup
 # ---------------------------------------------------------------------------
-# Authenticate eagerly so the first tool call doesn't pay the auth cost.
-try:
-    _get_ctx()
-    print("SharePoint context ready.", file=sys.stderr)
-except Exception as e:
-    print(f"Warning: eager auth failed ({e}), will retry on first tool call.", file=sys.stderr)
-
-if __name__ == "__main__":
-    mcp.run()
+def warmup() -> None:
+    try:
+        _get_ctx()
+        print("SharePoint context ready.", file=sys.stderr)
+    except Exception as e:
+        print(f"Warning: eager auth failed ({e}), will retry on first tool call.", file=sys.stderr)
