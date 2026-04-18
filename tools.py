@@ -1,20 +1,20 @@
-import os
 import io
 import re
 import sys
 from pathlib import Path
-from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from cache import _with_cache, get_stats as _cache_get_stats
+from constants import (
+    SHAREPOINT_SITE_URL,
+    SHAREPOINT_BASE_FOLDER,
+    STUDENT_EMAIL,
+    STUDENT_PASSWORD,
+    _REGISTRY,
+)
+from decorators import _with_backpressure
 from office365.runtime.auth.user_credential import UserCredential
 from office365.sharepoint.client_context import ClientContext
 from office365.sharepoint.search.service import SearchService
-
-load_dotenv(dotenv_path=Path(__file__).parent / ".env")
-
-SHAREPOINT_SITE_URL = "https://postidcac.sharepoint.com/sites/ComputerScienceLibrary-StudentsTeam2"
-SHAREPOINT_BASE_FOLDER = "/sites/ComputerScienceLibrary-StudentsTeam2/Shared Documents"
-STUDENT_EMAIL = os.getenv("SHAREPOINT_EMAIL")
-STUDENT_PASSWORD = os.getenv("SHAREPOINT_PASSWORD")
 
 _CLAUDE_MD = (Path(__file__).parent / "claude.md").read_text(encoding="utf-8")
 
@@ -44,9 +44,50 @@ def _get_ctx() -> ClientContext:
 
 
 # ---------------------------------------------------------------------------
+# Tool: registry_lookup
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def registry_lookup(query: str) -> str:
+    """Look up a course in the local registry to get its SharePoint path and year/semester.
+
+    ALWAYS call this tool first when the user mentions a course by name.
+    Only fall back to list_files / search_files if this returns no match.
+
+    Args:
+        query: Course name or partial name to search for (case-insensitive).
+
+    Returns:
+        Matching course(s) with name, year, semester, and full SharePoint path,
+        or a "not found" message if no match exists.
+    """
+    q = query.lower().strip()
+    matches = [
+        c for c in _REGISTRY
+        if q in c["name"].lower() or c["name"].lower() in q
+    ]
+    if not matches:
+        return (
+            f"No course matching '{query}' found in the registry. "
+            "Use list_files or search_files to browse SharePoint."
+        )
+    lines = [f"Registry matches for '{query}':\n"]
+    for c in matches:
+        sem = f"Semester {c['semester']}" if c["semester"] else "—"
+        year_label = f"Year {c['year']}" if c["year"] else "—"
+        full_path = f"{SHAREPOINT_BASE_FOLDER}/{c['path']}"
+        lines.append(f"  Course:   {c['name']}")
+        lines.append(f"  Year:     {year_label}  |  Semester: {sem}")
+        lines.append(f"  Path:     {full_path}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Tool: list_files
 # ---------------------------------------------------------------------------
 @mcp.tool()
+@_with_cache
+@_with_backpressure
 def list_files(folder_url: str = SHAREPOINT_BASE_FOLDER) -> str:
     """List files and subdirectories in a SharePoint folder.
 
@@ -86,6 +127,8 @@ def list_files(folder_url: str = SHAREPOINT_BASE_FOLDER) -> str:
 # Tool: read_file_content
 # ---------------------------------------------------------------------------
 @mcp.tool()
+@_with_cache
+@_with_backpressure
 def read_file_content(file_url: str) -> str:
     """Read and return the text content of a file stored in SharePoint.
 
@@ -125,6 +168,8 @@ def read_file_content(file_url: str) -> str:
 # Tool: search_files
 # ---------------------------------------------------------------------------
 @mcp.tool()
+@_with_cache
+@_with_backpressure
 def search_files(query: str, folder_url: str = "") -> str:
     """Search for files by name within a SharePoint folder (recursive).
 
@@ -171,6 +216,8 @@ def search_files(query: str, folder_url: str = "") -> str:
 # Tool: search_content
 # ---------------------------------------------------------------------------
 @mcp.tool()
+@_with_cache
+@_with_backpressure
 def search_content(
     query: str,
     folder_url: str = "",
@@ -253,6 +300,8 @@ def _detect_language(text: str) -> str:
 # Tool: read_pdf
 # ---------------------------------------------------------------------------
 @mcp.tool()
+@_with_cache
+@_with_backpressure
 def read_pdf(
     file_url: str,
     pages: str = "all",
@@ -319,6 +368,8 @@ def read_pdf(
 # Tool: read_docx
 # ---------------------------------------------------------------------------
 @mcp.tool()
+@_with_cache
+@_with_backpressure
 def read_docx(
     file_url: str,
     max_chars: int = 8000,
@@ -391,6 +442,8 @@ def read_docx(
 # Tool: read_pptx
 # ---------------------------------------------------------------------------
 @mcp.tool()
+@_with_cache
+@_with_backpressure
 def read_pptx(
     file_url: str,
     slides: str = "all",
@@ -462,6 +515,8 @@ def read_pptx(
 # Tool: get_file_metadata
 # ---------------------------------------------------------------------------
 @mcp.tool()
+@_with_cache
+@_with_backpressure
 def get_file_metadata(
     file_url: str,
     include_versions: bool = False,
@@ -542,6 +597,20 @@ def get_file_metadata(
         return "\n".join(lines)
     except Exception as e:
         return _format_error("get_file_metadata", file_url, e)
+
+
+# ---------------------------------------------------------------------------
+# Tool: cache_stats
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def cache_stats() -> str:
+    """Return Redis cache hit/miss/bypass counters for this server process.
+
+    Returns:
+        JSON-formatted stats: hits, misses, bypasses, bytes_served, redis_healthy.
+    """
+    import json as _json
+    return _json.dumps(_cache_get_stats(), indent=2)
 
 
 # ---------------------------------------------------------------------------

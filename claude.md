@@ -99,7 +99,8 @@ All course paths below are relative to this base.
 
 ## Instructions
 
-- When a user mentions a course by name (or a close match), look it up in the tables above and use the full SharePoint path directly — do not browse SharePoint to find it.
+- **ALWAYS call `registry_lookup` first** when the user mentions a course by name. Never call `list_files` or `search_files` just to find a course folder — `registry_lookup` returns the path instantly.
+- Only fall back to `list_files` / `search_files` if `registry_lookup` returns no match.
 - If a course is not in the registry, say so and offer to browse SharePoint to locate it.
 - To add a new course to this registry, append a row to the appropriate table above with the course name and its SharePoint path.
 - Elective course folders are generic (`Elective Course 1`, etc.) — if the user tells you which elective maps to which slot, update the table accordingly.
@@ -165,4 +166,15 @@ read_pdf(file_url=..., pages="1-5", max_chars=8000)
 
 - Quote the exact question text, including all sub-parts
 - Mention which file and year it came from
+
+---
+
+## Improvements Workflow
+
+- All improvement ideas live in `IMPROVEMENTS.md`.
+- When starting work on an item, flip its checkbox to `[~]`.
+- When an item is shipped:
+  1. Flip checkbox to `[x]` and move the entry under the `## Done` section at the bottom of `IMPROVEMENTS.md`.
+  2. Add a matching entry to `PROJECT_OVERVIEW.md` under a `## Recent Improvements` section (create it if missing). Keep it short: what changed, where in the code, why it matters.
+- Never ship an improvement without updating both files — `PROJECT_OVERVIEW.md` is the interview-facing narrative; `IMPROVEMENTS.md` is the backlog.
 - If not found in one year, try the next (2025 → 2024 → 2023)
